@@ -1,0 +1,11 @@
+from datetime import timedelta
+
+DEFAULT_ACCESS_TOKEN_TTL = timedelta(minutes=15)
+DEFAULT_REFRESH_TOKEN_TTL = timedelta(days=30)
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_LOGIN_RATE_LIMIT = 10
+DEFAULT_REGISTER_RATE_LIMIT = 5
+
+AUTH_SCHEMA = "auth"
+USERS_TABLE = "users"
+SESSIONS_TABLE = "sessions"

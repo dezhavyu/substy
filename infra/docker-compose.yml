@@ -1,0 +1,81 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth
+      POSTGRES_DB: auth
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ../services/auth/auth_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d auth"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "63790:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js"]
+    ports:
+      - "4223:4222"
+
+  auth-service:
+    build:
+      context: ../services/auth
+      dockerfile: Dockerfile
+    env_file:
+      - ../services/auth/.env.example
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+  test:
+    build:
+      context: ../services/auth
+      dockerfile: Dockerfile
+    command: ["pytest", "-q", "auth_service/tests/integration"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: auth
+      DB_USER: auth
+      DB_PASSWORD: auth
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+volumes:
+  pg_data:
