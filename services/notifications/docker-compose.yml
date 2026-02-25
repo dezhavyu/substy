@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: notifications
+      POSTGRES_PASSWORD: notifications
+      POSTGRES_DB: notifications
+    ports:
+      - "5435:5432"
+    volumes:
+      - notifications_pg_data:/var/lib/postgresql/data
+      - ./notifications_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifications -d notifications"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js"]
+    ports:
+      - "4224:4222"
+
+  notifications-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.example
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8091:8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+volumes:
+  notifications_pg_data:
