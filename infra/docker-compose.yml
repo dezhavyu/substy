@@ -39,7 +39,7 @@ services:
       context: ../services/auth
       dockerfile: Dockerfile
     env_file:
-      - ../services/auth/.env.example
+      - ../services/auth/.env
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
