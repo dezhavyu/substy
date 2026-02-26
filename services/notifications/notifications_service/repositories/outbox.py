@@ -1,3 +1,4 @@
+import json
 from uuid import UUID
 
 import asyncpg
@@ -28,8 +29,8 @@ class OutboxRepository:
             aggregate_type,
             aggregate_id,
             event_type,
-            payload,
-            headers,
+            json.dumps(payload, separators=(",", ":")),
+            json.dumps(headers, separators=(",", ":")),
         )
         return self._to_model(row)
 
@@ -88,13 +89,29 @@ class OutboxRepository:
 
     @staticmethod
     def _to_model(row: asyncpg.Record) -> OutboxEventRecord:
+        raw_payload = row["payload"]
+        if isinstance(raw_payload, str):
+            payload = json.loads(raw_payload)
+        elif isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            payload = dict(raw_payload)
+
+        raw_headers = row["headers"]
+        if isinstance(raw_headers, str):
+            headers = json.loads(raw_headers)
+        elif isinstance(raw_headers, dict):
+            headers = raw_headers
+        else:
+            headers = dict(raw_headers)
+
         return OutboxEventRecord(
             id=row["id"],
             aggregate_type=row["aggregate_type"],
             aggregate_id=row["aggregate_id"],
             event_type=row["event_type"],
-            payload=dict(row["payload"]),
-            headers=dict(row["headers"]),
+            payload=payload,
+            headers=headers,
             created_at=row["created_at"],
             published_at=row["published_at"],
             publish_attempts=row["publish_attempts"],

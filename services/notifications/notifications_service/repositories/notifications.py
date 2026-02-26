@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from uuid import UUID
 
@@ -26,7 +27,7 @@ class NotificationsRepository:
             """,
             notification_id,
             topic_id,
-            payload,
+            json.dumps(payload, separators=(",", ":")),
             scheduled_at,
             created_by,
             idempotency_key,
@@ -106,10 +107,18 @@ class NotificationsRepository:
 
     @staticmethod
     def _to_model(row: asyncpg.Record) -> NotificationRecord:
+        raw_payload = row["payload"]
+        if isinstance(raw_payload, str):
+            payload = json.loads(raw_payload)
+        elif isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            payload = dict(raw_payload)
+
         return NotificationRecord(
             id=row["id"],
             topic_id=row["topic_id"],
-            payload=dict(row["payload"]),
+            payload=payload,
             scheduled_at=row["scheduled_at"],
             status=row["status"],
             created_by=row["created_by"],
