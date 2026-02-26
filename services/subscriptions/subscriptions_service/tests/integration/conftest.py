@@ -22,9 +22,11 @@ async def prepare_database():
     settings = get_settings()
     conn = await asyncpg.connect(settings.database_dsn)
     try:
-        migration_path = Path(__file__).resolve().parents[2] / "migrations" / "001_init.sql"
-        sql = migration_path.read_text(encoding="utf-8")
-        await conn.execute(sql)
+        migrations_dir = Path(__file__).resolve().parents[2] / "migrations"
+        await conn.execute("DROP SCHEMA IF EXISTS subscriptions CASCADE")
+        for migration_path in sorted(migrations_dir.glob("*.sql")):
+            sql = migration_path.read_text(encoding="utf-8")
+            await conn.execute(sql)
         await conn.execute("TRUNCATE subscriptions.subscriptions, subscriptions.topics CASCADE")
     finally:
         await conn.close()

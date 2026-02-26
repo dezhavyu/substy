@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, time
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import asyncpg
 
@@ -8,6 +9,7 @@ from subscriptions_service.core.pagination import decode_cursor, subscribers_cur
 from subscriptions_service.repositories.records import SubscriberRecord, SubscriptionRecord
 from subscriptions_service.repositories.subscriptions import SubscriptionsRepository
 from subscriptions_service.repositories.topics import TopicsRepository
+from subscriptions_service.schemas.subscriptions import SubscriptionPreferencesPatchRequest
 
 
 class SubscriptionsService:
@@ -78,12 +80,13 @@ class SubscriptionsService:
                 raise NotFoundError("Subscription not found")
             return updated, False
 
-        created = await self._subscriptions.create(
-            conn,
-            subscription_id=uuid4(),
-            user_id=user_id,
-            topic_id=topic_id,
-        )
+        async with conn.transaction():
+            created = await self._subscriptions.create(
+                conn,
+                subscription_id=uuid4(),
+                user_id=user_id,
+                topic_id=topic_id,
+            )
         return created, True
 
     async def unsubscribe(
@@ -105,22 +108,78 @@ class SubscriptionsService:
                 is_active=False,
             )
 
-    async def update_status(
+    async def update_subscription(
         self,
         conn: asyncpg.Connection,
         user_id: UUID,
         subscription_id: UUID,
-        is_active: bool,
+        is_active: bool | None,
+        preferences_patch: SubscriptionPreferencesPatchRequest | None,
     ) -> SubscriptionRecord:
-        updated = await self._subscriptions.update_active(
-            conn,
+        existing = await self._subscriptions.get_by_id_for_user(
+            conn=conn,
             subscription_id=subscription_id,
             user_id=user_id,
-            is_active=is_active,
         )
-        if updated is None:
+        if existing is None:
             raise NotFoundError("Subscription not found")
-        return updated
+
+        target_is_active = existing.is_active if is_active is None else is_active
+        target_channels = existing.preferences.channels
+        target_timezone = existing.preferences.timezone
+        target_quiet_start = existing.preferences.quiet_hours_start
+        target_quiet_end = existing.preferences.quiet_hours_end
+
+        if preferences_patch is not None:
+            if preferences_patch.channels is not None:
+                target_channels = self._normalize_channels(preferences_patch.channels)
+
+            if preferences_patch.timezone is not None:
+                target_timezone = self._validate_timezone(preferences_patch.timezone)
+
+            if preferences_patch.quiet_hours is not None:
+                start = preferences_patch.quiet_hours.start
+                end = preferences_patch.quiet_hours.end
+                if start == end:
+                    target_quiet_start = None
+                    target_quiet_end = None
+                else:
+                    target_quiet_start = start
+                    target_quiet_end = end
+
+        if (target_quiet_start is None) ^ (target_quiet_end is None):
+            raise ValidationError("quiet hours must include both start and end")
+
+        async with conn.transaction():
+            if target_is_active != existing.is_active:
+                updated = await self._subscriptions.update_active(
+                    conn=conn,
+                    subscription_id=subscription_id,
+                    user_id=user_id,
+                    is_active=target_is_active,
+                )
+                if updated is None:
+                    raise NotFoundError("Subscription not found")
+
+            if preferences_patch is not None:
+                await self._subscriptions.upsert_preferences(
+                    conn=conn,
+                    subscription_id=subscription_id,
+                    channels=target_channels,
+                    quiet_hours_start=target_quiet_start,
+                    quiet_hours_end=target_quiet_end,
+                    timezone=target_timezone,
+                )
+
+            current = await self._subscriptions.get_by_id_for_user(
+                conn=conn,
+                subscription_id=subscription_id,
+                user_id=user_id,
+            )
+
+        if current is None:
+            raise NotFoundError("Subscription not found")
+        return current
 
     async def list_internal_subscribers(
         self,
@@ -158,3 +217,30 @@ class SubscriptionsService:
             next_cursor = subscribers_cursor(last.user_id, last.subscription_id)
 
         return rows, next_cursor
+
+    @staticmethod
+    def _normalize_channels(channels: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for channel in channels:
+            lowered = channel.strip().lower()
+            if lowered and lowered not in seen:
+                seen.add(lowered)
+                normalized.append(lowered)
+
+        if not normalized:
+            raise ValidationError("channels must not be empty")
+        return normalized
+
+    @staticmethod
+    def _validate_timezone(timezone_name: str) -> str:
+        timezone_name = timezone_name.strip()
+        if not timezone_name:
+            raise ValidationError("timezone must not be empty")
+
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValidationError("Invalid timezone") from exc
+
+        return timezone_name

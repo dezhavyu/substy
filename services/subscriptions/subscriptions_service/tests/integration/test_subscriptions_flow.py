@@ -29,7 +29,7 @@ async def test_create_topic_admin(client):
 
 
 @pytest.mark.asyncio
-async def test_subscribe_and_unsubscribe(client):
+async def test_subscribe_creates_default_preferences_and_unsubscribe(client):
     create_resp = await client.post(
         "/topics",
         json={"key": f"system.{uuid4().hex[:8]}", "name": "System", "description": None},
@@ -44,7 +44,14 @@ async def test_subscribe_and_unsubscribe(client):
         headers=_user_headers(user_id),
     )
     assert subscribe_resp.status_code == 201
-    subscription_id = subscribe_resp.json()["id"]
+    subscribe_body = subscribe_resp.json()
+    subscription_id = subscribe_body["id"]
+
+    assert subscribe_body["preferences"] == {
+        "channels": ["push"],
+        "quiet_hours": None,
+        "timezone": "UTC",
+    }
 
     second_resp = await client.post(
         "/subscriptions",
@@ -59,7 +66,43 @@ async def test_subscribe_and_unsubscribe(client):
 
 
 @pytest.mark.asyncio
-async def test_internal_subscribers_cursor_pagination(client):
+async def test_patch_updates_preferences(client):
+    create_resp = await client.post(
+        "/topics",
+        json={"key": f"prefs.{uuid4().hex[:8]}", "name": "Prefs", "description": None},
+        headers=_admin_headers(),
+    )
+    topic_id = create_resp.json()["id"]
+
+    user_id = str(uuid4())
+    subscribe_resp = await client.post(
+        "/subscriptions",
+        json={"topic_id": topic_id},
+        headers=_user_headers(user_id),
+    )
+    subscription_id = subscribe_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/subscriptions/{subscription_id}",
+        headers=_user_headers(user_id),
+        json={
+            "preferences": {
+                "channels": ["push", "web"],
+                "quiet_hours": {"start": "22:00:00", "end": "07:00:00"},
+                "timezone": "Europe/Zurich",
+            }
+        },
+    )
+    assert patch_resp.status_code == 200
+    body = patch_resp.json()
+
+    assert body["preferences"]["channels"] == ["push", "web"]
+    assert body["preferences"]["quiet_hours"] == {"start": "22:00:00", "end": "07:00:00"}
+    assert body["preferences"]["timezone"] == "Europe/Zurich"
+
+
+@pytest.mark.asyncio
+async def test_internal_subscribers_cursor_pagination_returns_preferences(client):
     create_resp = await client.post(
         "/topics",
         json={"key": f"fanout.{uuid4().hex[:8]}", "name": "Fanout", "description": None},
@@ -68,13 +111,28 @@ async def test_internal_subscribers_cursor_pagination(client):
     topic_id = create_resp.json()["id"]
 
     users = [str(uuid4()) for _ in range(5)]
-    for user_id in users:
+    for index, user_id in enumerate(users):
         response = await client.post(
             "/subscriptions",
             json={"topic_id": topic_id},
             headers=_user_headers(user_id),
         )
         assert response.status_code in (200, 201)
+
+        if index == 0:
+            subscription_id = response.json()["id"]
+            patch = await client.patch(
+                f"/subscriptions/{subscription_id}",
+                headers=_user_headers(user_id),
+                json={
+                    "preferences": {
+                        "channels": ["email"],
+                        "quiet_hours": {"start": "23:30:00", "end": "06:30:00"},
+                        "timezone": "Europe/Zurich",
+                    }
+                },
+            )
+            assert patch.status_code == 200
 
     first_page = await client.get(f"/internal/topics/{topic_id}/subscribers?limit=2")
     assert first_page.status_code == 200
@@ -94,3 +152,36 @@ async def test_internal_subscribers_cursor_pagination(client):
     assert len(second_ids) == 2
     assert set(first_ids).isdisjoint(set(second_ids))
     assert first_body["next_cursor"] is not None
+
+    for item in first_body["items"] + second_body["items"]:
+        assert "subscription_id" in item
+        assert item["channels"]
+        assert item["timezone"]
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_patch_foreign_subscription(client):
+    create_resp = await client.post(
+        "/topics",
+        json={"key": f"private.{uuid4().hex[:8]}", "name": "Private", "description": None},
+        headers=_admin_headers(),
+    )
+    topic_id = create_resp.json()["id"]
+
+    owner_id = str(uuid4())
+    other_id = str(uuid4())
+
+    subscribe_resp = await client.post(
+        "/subscriptions",
+        json={"topic_id": topic_id},
+        headers=_user_headers(owner_id),
+    )
+    subscription_id = subscribe_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/subscriptions/{subscription_id}",
+        headers=_user_headers(other_id),
+        json={"preferences": {"channels": ["web"]}},
+    )
+
+    assert patch_resp.status_code == 404

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, time
 from uuid import UUID
 
 import asyncpg
@@ -16,14 +16,28 @@ class DeliveryAttemptsRepository:
         user_id: UUID,
         channel: str,
         payload: dict,
+        quiet_hours_start: time | None,
+        quiet_hours_end: time | None,
+        timezone: str,
     ) -> tuple[DeliveryAttemptRecord, bool]:
         try:
             row = await conn.fetchrow(
                 """
                 INSERT INTO delivery.delivery_attempts (
-                    id, notification_id, user_id, channel, payload, status, attempt_no
-                ) VALUES ($1, $2, $3, $4, $5::jsonb, 'pending', 0)
-                RETURNING id, notification_id, user_id, channel, payload, status, attempt_no,
+                    id,
+                    notification_id,
+                    user_id,
+                    channel,
+                    payload,
+                    quiet_hours_start,
+                    quiet_hours_end,
+                    timezone,
+                    status,
+                    attempt_no
+                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'pending', 0)
+                RETURNING id, notification_id, user_id, channel, payload,
+                          quiet_hours_start, quiet_hours_end, timezone,
+                          status, attempt_no,
                           last_error_code, last_error_message, next_retry_at, created_at, updated_at
                 """,
                 attempt_id,
@@ -31,6 +45,9 @@ class DeliveryAttemptsRepository:
                 user_id,
                 channel,
                 json.dumps(payload, separators=(",", ":")),
+                quiet_hours_start,
+                quiet_hours_end,
+                timezone,
             )
             return self._to_record(row), True
         except asyncpg.PostgresError as exc:
@@ -38,7 +55,9 @@ class DeliveryAttemptsRepository:
                 raise
             row = await conn.fetchrow(
                 """
-                SELECT id, notification_id, user_id, channel, payload, status, attempt_no,
+                SELECT id, notification_id, user_id, channel, payload,
+                       quiet_hours_start, quiet_hours_end, timezone,
+                       status, attempt_no,
                        last_error_code, last_error_message, next_retry_at, created_at, updated_at
                 FROM delivery.delivery_attempts
                 WHERE notification_id = $1
@@ -54,7 +73,9 @@ class DeliveryAttemptsRepository:
     async def get_for_update(self, conn: asyncpg.Connection, attempt_id: UUID) -> DeliveryAttemptRecord | None:
         row = await conn.fetchrow(
             """
-            SELECT id, notification_id, user_id, channel, payload, status, attempt_no,
+            SELECT id, notification_id, user_id, channel, payload,
+                   quiet_hours_start, quiet_hours_end, timezone,
+                   status, attempt_no,
                    last_error_code, last_error_message, next_retry_at, created_at, updated_at
             FROM delivery.delivery_attempts
             WHERE id = $1
@@ -76,6 +97,30 @@ class DeliveryAttemptsRepository:
             WHERE id = $1
             """,
             attempt_id,
+        )
+
+    async def mark_delayed(
+        self,
+        conn: asyncpg.Connection,
+        attempt_id: UUID,
+        next_retry_at: datetime,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        await conn.execute(
+            """
+            UPDATE delivery.delivery_attempts
+            SET status = 'failed',
+                last_error_code = $2,
+                last_error_message = $3,
+                next_retry_at = $4,
+                updated_at = now()
+            WHERE id = $1
+            """,
+            attempt_id,
+            error_code,
+            error_message[:512],
+            next_retry_at,
         )
 
     async def mark_failed(
@@ -124,6 +169,9 @@ class DeliveryAttemptsRepository:
             user_id=row["user_id"],
             channel=row["channel"],
             payload=payload,
+            quiet_hours_start=row["quiet_hours_start"],
+            quiet_hours_end=row["quiet_hours_end"],
+            timezone=row["timezone"],
             status=row["status"],
             attempt_no=row["attempt_no"],
             last_error_code=row["last_error_code"],

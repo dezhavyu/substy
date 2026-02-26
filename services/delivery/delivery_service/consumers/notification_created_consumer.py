@@ -2,6 +2,7 @@ import json
 import logging
 
 from arq.connections import ArqRedis
+from nats import errors as nats_errors
 
 from delivery_service.core.container import Container
 from delivery_service.repositories.delivery_attempts import DeliveryAttemptsRepository
@@ -27,7 +28,12 @@ class NotificationCreatedConsumer:
 
         try:
             while True:
-                messages = await subscription.fetch(10, timeout=1)
+                try:
+                    messages = await subscription.fetch(10, timeout=1)
+                except nats_errors.TimeoutError:
+                    # Pull consumer timeout is expected when there are no messages yet.
+                    continue
+
                 for msg in messages:
                     try:
                         payload = json.loads(msg.data.decode("utf-8"))

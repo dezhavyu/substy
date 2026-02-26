@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from uuid import UUID
 
 
@@ -10,6 +10,9 @@ class DeliveryAttemptRecord:
     user_id: UUID
     channel: str
     payload: dict
+    quiet_hours_start: time | None
+    quiet_hours_end: time | None
+    timezone: str
     status: str
     attempt_no: int
     last_error_code: str | None

@@ -26,6 +26,16 @@ async def list_topic_subscribers(
         cursor=cursor,
     )
     return InternalSubscribersResponse(
-        items=[InternalSubscribersResponseItem(user_id=str(row.user_id)) for row in subscribers],
+        items=[
+            InternalSubscribersResponseItem(
+                user_id=str(row.user_id),
+                subscription_id=str(row.subscription_id),
+                channels=row.channels,
+                quiet_hours_start=row.quiet_hours_start,
+                quiet_hours_end=row.quiet_hours_end,
+                timezone=row.timezone,
+            )
+            for row in subscribers
+        ],
         next_cursor=next_cursor,
     )

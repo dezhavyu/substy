@@ -38,9 +38,45 @@ async def test_fanout_creates_attempts_and_is_idempotent(clean_database, redis_p
         created_at="2026-01-01T00:00:00Z",
     )
 
+    user1 = str(uuid4())
+    user2 = str(uuid4())
+    user3 = str(uuid4())
+
     pages = [
-        {"items": [{"user_id": str(uuid4())}, {"user_id": str(uuid4())}], "next_cursor": "abc"},
-        {"items": [{"user_id": str(uuid4())}], "next_cursor": None},
+        {
+            "items": [
+                {
+                    "user_id": user1,
+                    "subscription_id": str(uuid4()),
+                    "channels": ["push", "email"],
+                    "quiet_hours_start": "22:00:00",
+                    "quiet_hours_end": "07:00:00",
+                    "timezone": "UTC",
+                },
+                {
+                    "user_id": user2,
+                    "subscription_id": str(uuid4()),
+                    "channels": ["web"],
+                    "quiet_hours_start": None,
+                    "quiet_hours_end": None,
+                    "timezone": "Europe/Zurich",
+                },
+            ],
+            "next_cursor": "abc",
+        },
+        {
+            "items": [
+                {
+                    "user_id": user3,
+                    "subscription_id": str(uuid4()),
+                    "channels": ["push"],
+                    "quiet_hours_start": None,
+                    "quiet_hours_end": None,
+                    "timezone": "UTC",
+                }
+            ],
+            "next_cursor": None,
+        },
     ]
 
     service = FanoutService(
@@ -60,7 +96,7 @@ async def test_fanout_creates_attempts_and_is_idempotent(clean_database, redis_p
         assert duplicate is False
 
         attempts = await conn.fetchval("SELECT COUNT(*) FROM delivery.delivery_attempts")
-        assert int(attempts) == 3 * len(settings.channels)
+        assert int(attempts) == 4
     finally:
         await conn.close()
 
@@ -79,8 +115,34 @@ async def test_subscribers_pagination_is_fully_processed(clean_database, redis_p
         subscriptions_fetcher=SubscriptionsFetcherService(
             FakeSubscriptionsClient(
                 [
-                    {"items": [{"user_id": u} for u in users_page_1], "next_cursor": "next"},
-                    {"items": [{"user_id": u} for u in users_page_2], "next_cursor": None},
+                    {
+                        "items": [
+                            {
+                                "user_id": u,
+                                "subscription_id": str(uuid4()),
+                                "channels": ["push"],
+                                "quiet_hours_start": None,
+                                "quiet_hours_end": None,
+                                "timezone": "UTC",
+                            }
+                            for u in users_page_1
+                        ],
+                        "next_cursor": "next",
+                    },
+                    {
+                        "items": [
+                            {
+                                "user_id": u,
+                                "subscription_id": str(uuid4()),
+                                "channels": ["email", "web"],
+                                "quiet_hours_start": "23:00:00",
+                                "quiet_hours_end": "06:00:00",
+                                "timezone": "Europe/Zurich",
+                            }
+                            for u in users_page_2
+                        ],
+                        "next_cursor": None,
+                    },
                 ]
             )
         ),
@@ -103,5 +165,8 @@ async def test_subscribers_pagination_is_fully_processed(clean_database, redis_p
         users = await conn.fetch("SELECT DISTINCT user_id FROM delivery.delivery_attempts")
         fetched_users = {str(row["user_id"]) for row in users}
         assert fetched_users == set(users_page_1 + users_page_2)
+
+        attempts_count = await conn.fetchval("SELECT COUNT(*) FROM delivery.delivery_attempts")
+        assert int(attempts_count) == 2 + 2
     finally:
         await conn.close()

@@ -5,15 +5,38 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from subscriptions_service.api.dependencies import get_subscriptions_service
 from subscriptions_service.core.dependencies import get_connection, get_current_user_id
+from subscriptions_service.repositories.records import SubscriptionRecord
 from subscriptions_service.schemas.subscriptions import (
     MySubscriptionsResponse,
+    QuietHoursResponse,
     SubscribeRequest,
+    SubscriptionPreferencesResponse,
     SubscriptionResponse,
     UpdateSubscriptionRequest,
 )
 from subscriptions_service.services.subscriptions import SubscriptionsService
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
+
+
+def _to_subscription_response(subscription: SubscriptionRecord) -> SubscriptionResponse:
+    quiet_hours = None
+    if subscription.preferences.quiet_hours_start and subscription.preferences.quiet_hours_end:
+        quiet_hours = QuietHoursResponse(
+            start=subscription.preferences.quiet_hours_start,
+            end=subscription.preferences.quiet_hours_end,
+        )
+
+    return SubscriptionResponse(
+        id=str(subscription.id),
+        topic_id=str(subscription.topic_id),
+        is_active=subscription.is_active,
+        preferences=SubscriptionPreferencesResponse(
+            channels=subscription.preferences.channels,
+            quiet_hours=quiet_hours,
+            timezone=subscription.preferences.timezone,
+        ),
+    )
 
 
 @router.get("/me", response_model=MySubscriptionsResponse)
@@ -31,14 +54,7 @@ async def my_subscriptions(
         cursor=cursor,
     )
     return MySubscriptionsResponse(
-        items=[
-            SubscriptionResponse(
-                id=str(subscription.id),
-                topic_id=str(subscription.topic_id),
-                is_active=subscription.is_active,
-            )
-            for subscription in subscriptions
-        ],
+        items=[_to_subscription_response(subscription) for subscription in subscriptions],
         next_cursor=next_cursor,
     )
 
@@ -59,11 +75,7 @@ async def subscribe(
     if not created:
         response.status_code = status.HTTP_200_OK
 
-    return SubscriptionResponse(
-        id=str(subscription.id),
-        topic_id=str(subscription.topic_id),
-        is_active=subscription.is_active,
-    )
+    return _to_subscription_response(subscription)
 
 
 @router.delete("/{subscription_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -85,10 +97,11 @@ async def update_subscription(
     conn: asyncpg.Connection = Depends(get_connection),
     service: SubscriptionsService = Depends(get_subscriptions_service),
 ) -> SubscriptionResponse:
-    updated = await service.update_status(
+    updated = await service.update_subscription(
         conn=conn,
         user_id=user_id,
         subscription_id=subscription_id,
         is_active=payload.is_active,
+        preferences_patch=payload.preferences,
     )
-    return SubscriptionResponse(id=str(updated.id), topic_id=str(updated.topic_id), is_active=updated.is_active)
+    return _to_subscription_response(updated)
