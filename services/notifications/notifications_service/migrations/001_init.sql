@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS notifications.notifications (
     idempotency_key TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT notifications_status_check CHECK (status IN ('created', 'processing', 'completed', 'failed', 'cancelled'))
+    CONSTRAINT notifications_status_check CHECK (status IN ('created', 'scheduled', 'queued', 'cancelled'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_created_by_created_at

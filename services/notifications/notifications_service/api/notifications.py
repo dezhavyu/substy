@@ -105,3 +105,26 @@ async def get_notification(
         scheduled_at=notification.scheduled_at,
         created_at=notification.created_at,
     )
+
+
+@router.post("/{notification_id}/cancel", response_model=NotificationResponse)
+async def cancel_notification(
+    notification_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    roles: set[str] = Depends(get_roles),
+    conn: asyncpg.Connection = Depends(get_connection),
+    service: NotificationsService = Depends(get_notifications_service),
+) -> NotificationResponse:
+    notification = await service.cancel_notification(
+        conn=conn,
+        notification_id=notification_id,
+        user_id=user_id,
+        roles=roles,
+    )
+    return NotificationResponse(
+        id=notification.id,
+        topic_id=notification.topic_id,
+        status=notification.status,
+        scheduled_at=notification.scheduled_at,
+        created_at=notification.created_at,
+    )

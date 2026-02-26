@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-NotificationStatus = Literal["created", "processing", "completed", "failed", "cancelled"]
+NotificationStatus = Literal["created", "scheduled", "queued", "cancelled"]
 
 
 class CreateNotificationRequest(BaseModel):

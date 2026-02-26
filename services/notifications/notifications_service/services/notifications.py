@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import asyncpg
 
-from notifications_service.core.exceptions import ForbiddenError, NotFoundError, ValidationError
+from notifications_service.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from notifications_service.core.metrics import MetricsRegistry
 from notifications_service.core.pagination import decode_cursor, notifications_cursor
 from notifications_service.core.payload import payload_depth, payload_size_bytes
@@ -14,7 +14,7 @@ from notifications_service.repositories.records import NotificationRecord
 
 
 class NotificationsService:
-    _allowed_status_filters = {"created", "processing", "completed", "failed", "cancelled"}
+    _allowed_status_filters = {"created", "scheduled", "queued", "cancelled"}
 
     def __init__(
         self,
@@ -39,6 +39,7 @@ class NotificationsService:
         request_id: str,
     ) -> tuple[NotificationRecord, bool]:
         self._validate_payload(payload)
+        normalized_scheduled_at = self._normalize_scheduled_at(scheduled_at)
 
         if idempotency_key:
             existing = await self._notifications.get_by_idempotency_key(conn, user_id, idempotency_key)
@@ -48,6 +49,8 @@ class NotificationsService:
         notification_id = uuid4()
         event_id = uuid4()
 
+        status = "created" if self._is_immediate(normalized_scheduled_at) else "scheduled"
+
         try:
             async with conn.transaction():
                 notification = await self._notifications.create(
@@ -55,30 +58,33 @@ class NotificationsService:
                     notification_id=notification_id,
                     topic_id=topic_id,
                     payload=payload,
-                    scheduled_at=scheduled_at,
+                    scheduled_at=normalized_scheduled_at,
                     created_by=user_id,
                     idempotency_key=idempotency_key,
+                    status=status,
                 )
-                await self._outbox.create_event(
-                    conn=conn,
-                    event_id=event_id,
-                    aggregate_type="notification",
-                    aggregate_id=notification.id,
-                    event_type="notification.created.v1",
-                    payload={
-                        "event_id": str(event_id),
-                        "notification_id": str(notification.id),
-                        "topic_id": str(notification.topic_id),
-                        "created_by": str(notification.created_by),
-                        "payload": notification.payload,
-                        "scheduled_at": notification.scheduled_at.isoformat() if notification.scheduled_at else None,
-                        "created_at": notification.created_at.isoformat(),
-                    },
-                    headers={
-                        "request_id": request_id,
-                        "user_id": str(user_id),
-                    },
-                )
+
+                if notification.status == "created":
+                    await self._outbox.create_event(
+                        conn=conn,
+                        event_id=event_id,
+                        aggregate_type="notification",
+                        aggregate_id=notification.id,
+                        event_type="notification.created.v1",
+                        payload={
+                            "event_id": str(event_id),
+                            "notification_id": str(notification.id),
+                            "topic_id": str(notification.topic_id),
+                            "created_by": str(notification.created_by),
+                            "payload": notification.payload,
+                            "scheduled_at": notification.scheduled_at.isoformat() if notification.scheduled_at else None,
+                            "created_at": notification.created_at.isoformat(),
+                        },
+                        headers={
+                            "request_id": request_id,
+                            "user_id": str(user_id),
+                        },
+                    )
 
             self._metrics.inc_notifications_created()
             return notification, True
@@ -104,6 +110,28 @@ class NotificationsService:
             raise ForbiddenError()
 
         return notification
+
+    async def cancel_notification(
+        self,
+        conn: asyncpg.Connection,
+        notification_id: UUID,
+        user_id: UUID,
+        roles: set[str],
+    ) -> NotificationRecord:
+        notification = await self.get_notification(
+            conn=conn,
+            notification_id=notification_id,
+            user_id=user_id,
+            roles=roles,
+        )
+
+        if notification.status != "scheduled":
+            raise ConflictError("Only scheduled notifications can be cancelled")
+
+        cancelled = await self._notifications.cancel_if_scheduled(conn, notification_id)
+        if cancelled is None:
+            raise ConflictError("Notification is not scheduled")
+        return cancelled
 
     async def list_my_notifications(
         self,
@@ -154,3 +182,17 @@ class NotificationsService:
         depth = payload_depth(payload)
         if depth > self._settings.payload_max_depth:
             raise ValidationError("Payload is too deep")
+
+    @staticmethod
+    def _normalize_scheduled_at(scheduled_at: datetime | None) -> datetime | None:
+        if scheduled_at is None:
+            return None
+        if scheduled_at.tzinfo is None or scheduled_at.tzinfo.utcoffset(scheduled_at) is None:
+            raise ValidationError("scheduled_at must include timezone")
+        return scheduled_at.astimezone(timezone.utc)
+
+    @staticmethod
+    def _is_immediate(scheduled_at: datetime | None) -> bool:
+        if scheduled_at is None:
+            return True
+        return scheduled_at <= datetime.now(timezone.utc)

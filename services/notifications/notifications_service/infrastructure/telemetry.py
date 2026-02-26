@@ -1,3 +1,4 @@
+from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
@@ -12,7 +13,7 @@ from notifications_service.core.settings import Settings
 _initialized = False
 
 
-def configure_telemetry(settings: Settings, app) -> None:  # type: ignore[no-untyped-def]
+def configure_telemetry(settings: Settings, app: FastAPI | None = None) -> None:
     global _initialized
     if _initialized or not settings.otel_enabled:
         return
@@ -23,6 +24,7 @@ def configure_telemetry(settings: Settings, app) -> None:  # type: ignore[no-unt
     )
     trace.set_tracer_provider(provider)
 
-    FastAPIInstrumentor.instrument_app(app)
+    if app is not None:
+        FastAPIInstrumentor.instrument_app(app)
     AsyncPGInstrumentor().instrument()
     _initialized = True

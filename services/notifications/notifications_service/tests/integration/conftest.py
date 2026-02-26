@@ -25,6 +25,7 @@ async def prepare_database():
     conn = await asyncpg.connect(settings.database_dsn)
     try:
         migration_path = Path(__file__).resolve().parents[2] / "migrations" / "001_init.sql"
+        await conn.execute("DROP SCHEMA IF EXISTS notifications CASCADE")
         await conn.execute(migration_path.read_text(encoding="utf-8"))
     finally:
         await conn.close()

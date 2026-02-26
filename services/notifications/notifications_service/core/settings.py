@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     outbox_batch_size: int = Field(default=100, alias="OUTBOX_BATCH_SIZE")
     outbox_publish_interval_seconds: float = Field(default=2.0, alias="OUTBOX_PUBLISH_INTERVAL_SECONDS")
-    outbox_worker_enabled: bool = Field(default=True, alias="OUTBOX_WORKER_ENABLED")
+    outbox_worker_enabled: bool = Field(default=False, alias="OUTBOX_WORKER_ENABLED")
+    scheduler_batch_size: int = Field(default=200, alias="SCHEDULER_BATCH_SIZE")
+    scheduler_tick_interval_seconds: float = Field(default=2.0, alias="SCHEDULER_TICK_INTERVAL_SECONDS")
 
     payload_max_bytes: int = Field(default=65536, alias="PAYLOAD_MAX_BYTES")
     payload_max_depth: int = Field(default=8, alias="PAYLOAD_MAX_DEPTH")

@@ -17,18 +17,20 @@ class NotificationsRepository:
         scheduled_at: datetime | None,
         created_by: UUID,
         idempotency_key: str | None,
+        status: str,
     ) -> NotificationRecord:
         row = await conn.fetchrow(
             """
             INSERT INTO notifications.notifications (
                 id, topic_id, payload, scheduled_at, status, created_by, idempotency_key
-            ) VALUES ($1, $2, $3::jsonb, $4, 'created', $5, $6)
+            ) VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
             RETURNING id, topic_id, payload, scheduled_at, status, created_by, idempotency_key, created_at, updated_at
             """,
             notification_id,
             topic_id,
             json.dumps(payload, separators=(",", ":")),
             scheduled_at,
+            status,
             created_by,
             idempotency_key,
         )
@@ -104,6 +106,90 @@ class NotificationsRepository:
 
         rows = await conn.fetch(query, *params)
         return [self._to_model(row) for row in rows]
+
+    async def lock_due_scheduled_batch(
+        self,
+        conn: asyncpg.Connection,
+        limit: int,
+    ) -> list[NotificationRecord]:
+        rows = await conn.fetch(
+            """
+            SELECT id, topic_id, payload, scheduled_at, status, created_by, idempotency_key, created_at, updated_at
+            FROM notifications.notifications
+            WHERE status = 'scheduled'
+              AND scheduled_at <= now()
+            ORDER BY scheduled_at ASC, id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            """,
+            limit,
+        )
+        return [self._to_model(row) for row in rows]
+
+    async def mark_queued_by_ids(
+        self,
+        conn: asyncpg.Connection,
+        notification_ids: list[UUID],
+    ) -> list[NotificationRecord]:
+        if not notification_ids:
+            return []
+
+        rows = await conn.fetch(
+            """
+            WITH updated AS (
+                UPDATE notifications.notifications
+                SET status = 'queued',
+                    updated_at = now()
+                WHERE id = ANY($1::uuid[])
+                  AND status = 'scheduled'
+                RETURNING id, topic_id, payload, scheduled_at, status, created_by, idempotency_key, created_at, updated_at
+            )
+            SELECT id, topic_id, payload, scheduled_at, status, created_by, idempotency_key, created_at, updated_at
+            FROM updated
+            ORDER BY scheduled_at ASC, id ASC
+            """,
+            notification_ids,
+        )
+        return [self._to_model(row) for row in rows]
+
+    async def cancel_if_scheduled(
+        self,
+        conn: asyncpg.Connection,
+        notification_id: UUID,
+    ) -> NotificationRecord | None:
+        row = await conn.fetchrow(
+            """
+            UPDATE notifications.notifications
+            SET status = 'cancelled',
+                updated_at = now()
+            WHERE id = $1
+              AND status = 'scheduled'
+            RETURNING id, topic_id, payload, scheduled_at, status, created_by, idempotency_key, created_at, updated_at
+            """,
+            notification_id,
+        )
+        return self._to_model(row) if row else None
+
+    async def count_scheduled_backlog(self, conn: asyncpg.Connection) -> int:
+        count = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM notifications.notifications
+            WHERE status = 'scheduled'
+            """
+        )
+        return int(count)
+
+    async def count_scheduled_due(self, conn: asyncpg.Connection) -> int:
+        count = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM notifications.notifications
+            WHERE status = 'scheduled'
+              AND scheduled_at <= now()
+            """
+        )
+        return int(count)
 
     @staticmethod
     def _to_model(row: asyncpg.Record) -> NotificationRecord:
