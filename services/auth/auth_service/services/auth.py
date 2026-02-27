@@ -25,14 +25,14 @@ class AuthService:
         password_manager: PasswordManager,
         refresh_token_manager: RefreshTokenManager,
         jwt_manager: JWTManager,
-        refresh_ttl_days: int,
+        refresh_ttl_seconds: int,
     ) -> None:
         self._users = users_repository
         self._sessions = sessions_repository
         self._password_manager = password_manager
         self._refresh_token_manager = refresh_token_manager
         self._jwt_manager = jwt_manager
-        self._refresh_ttl_days = refresh_ttl_days
+        self._refresh_ttl_seconds = refresh_ttl_seconds
 
     async def register(self, conn: asyncpg.Connection, email: str, password: str) -> bool:
         password_hash = self._password_manager.hash_password(password)
@@ -127,7 +127,7 @@ class AuthService:
             token_hash=refresh_token_hash,
             user_agent=user_agent,
             ip_address=ip_address,
-            expires_at=self._refresh_token_manager.expires_at(self._refresh_ttl_days),
+            expires_at=self._refresh_token_manager.expires_at(self._refresh_ttl_seconds),
         )
 
         access_token, expires_in = self._jwt_manager.create_access_token(str(user_id))

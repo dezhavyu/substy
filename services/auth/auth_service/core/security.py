@@ -32,5 +32,5 @@ class RefreshTokenManager:
         return hashlib.sha256(payload).hexdigest()
 
     @staticmethod
-    def expires_at(ttl_days: int) -> datetime:
-        return datetime.now(tz=timezone.utc) + timedelta(days=ttl_days)
+    def expires_at(ttl_seconds: int) -> datetime:
+        return datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)

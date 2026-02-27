@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,18 @@ class Settings(BaseSettings):
     rate_limit_user_per_minute: int = Field(default=60, alias="RATE_LIMIT_USER_PER_MINUTE")
 
     cors_allow_origins: str = Field(default="http://localhost:3000,http://localhost:5173", alias="CORS_ALLOW_ORIGINS")
+    refresh_cookie_name: str = Field(default="refresh_token", alias="REFRESH_COOKIE_NAME")
+    refresh_cookie_domain: str | None = Field(default=None, alias="REFRESH_COOKIE_DOMAIN")
+    refresh_cookie_path: str = Field(default="/", alias="REFRESH_COOKIE_PATH")
+    refresh_cookie_secure: bool = Field(default=False, alias="REFRESH_COOKIE_SECURE")
+    refresh_cookie_samesite: Literal["lax", "strict", "none"] = Field(
+        default="lax",
+        alias="REFRESH_COOKIE_SAMESITE",
+    )
+    refresh_cookie_max_age_seconds: int = Field(
+        default=30 * 24 * 60 * 60,
+        alias="REFRESH_COOKIE_MAX_AGE_SECONDS",
+    )
     max_body_bytes: int = Field(default=1024 * 1024, alias="MAX_BODY_BYTES")
 
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
@@ -53,6 +66,11 @@ class Settings(BaseSettings):
     @property
     def parsed_cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+    @property
+    def parsed_refresh_cookie_domain(self) -> str | None:
+        value = (self.refresh_cookie_domain or "").strip()
+        return value or None
 
 
 @lru_cache

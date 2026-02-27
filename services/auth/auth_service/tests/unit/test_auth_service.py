@@ -93,7 +93,7 @@ def build_service():
         password_manager=PasswordManager(),
         refresh_token_manager=RefreshTokenManager(settings.refresh_token_pepper),
         jwt_manager=JWTManager(settings),
-        refresh_ttl_days=settings.jwt_refresh_token_ttl_days,
+        refresh_ttl_seconds=settings.effective_refresh_token_ttl_seconds,
     )
     return service, users, sessions
 

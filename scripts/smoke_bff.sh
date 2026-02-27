@@ -4,54 +4,120 @@ set -euo pipefail
 BFF_URL="${BFF_URL:-http://localhost:8070}"
 EMAIL="${EMAIL:-smoke-$(date +%s)@example.com}"
 PASSWORD="${PASSWORD:-VeryStrongPassword123}"
-TOPIC_ID="${TOPIC_ID:-}"
 
-if [[ -z "$TOPIC_ID" ]]; then
-  echo "TOPIC_ID is required. Example: TOPIC_ID=<uuid> ./scripts/smoke_bff.sh"
+RESPONSE_BODY=""
+RESPONSE_CODE=""
+COOKIE_JAR="$(mktemp)"
+trap 'rm -f "$COOKIE_JAR"' EXIT
+
+request() {
+  local method="$1"
+  shift
+  local url="$1"
+  shift
+  local body="${1-__NO_BODY__}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+
+  if [[ "$body" == "__NO_BODY__" ]]; then
+    RESPONSE_CODE="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$url" "$@")"
+  else
+    RESPONSE_CODE="$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$url" -H 'Content-Type: application/json' "$@" -d "$body")"
+  fi
+
+  RESPONSE_BODY="$(cat "$tmp")"
+  rm -f "$tmp"
+}
+
+expect_code() {
+  local actual="$1"
+  shift
+  for expected in "$@"; do
+    if [[ "$actual" == "$expected" ]]; then
+      return 0
+    fi
+  done
+
+  echo "Unexpected status: got $actual, expected one of: $*"
+  echo "Response body: $RESPONSE_BODY"
   exit 1
-fi
+}
 
-echo "[1/5] Register: $EMAIL"
-REGISTER_RESP=$(curl -sS -X POST "$BFF_URL/auth/register" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
-echo "$REGISTER_RESP"
+json_get() {
+  local key="$1"
+  JSON="$RESPONSE_BODY" KEY="$key" python3 - <<'PY'
+import json
+import os
 
-echo "[2/5] Login"
-LOGIN_RESP=$(curl -sS -X POST "$BFF_URL/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
+try:
+    data = json.loads(os.environ["JSON"])
+except Exception:
+    print("")
+    raise SystemExit(0)
 
-echo "$LOGIN_RESP"
-ACCESS_TOKEN=$(echo "$LOGIN_RESP" | python3 -c 'import sys, json; d=json.load(sys.stdin); print(d.get("access_token", ""))')
+value = data
+for part in os.environ["KEY"].split('.'):
+    if isinstance(value, dict):
+        value = value.get(part, "")
+    else:
+        value = ""
+        break
+
+if value is None:
+    print("")
+elif isinstance(value, (dict, list)):
+    print(json.dumps(value))
+else:
+    print(value)
+PY
+}
+
+echo "[1/6] Register: $EMAIL"
+request POST "$BFF_URL/api/auth/register" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+expect_code "$RESPONSE_CODE" 200 201
+echo "$RESPONSE_BODY"
+
+echo "[2/6] Login"
+request POST "$BFF_URL/api/auth/login" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" -c "$COOKIE_JAR"
+expect_code "$RESPONSE_CODE" 200
+echo "$RESPONSE_BODY"
+ACCESS_TOKEN="$(json_get access_token)"
 if [[ -z "$ACCESS_TOKEN" ]]; then
   echo "Login failed: access_token missing"
   exit 1
 fi
 
-echo "[3/5] Subscribe to topic: $TOPIC_ID"
-SUB_RESP=$(curl -sS -X POST "$BFF_URL/subscriptions" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{\"topic_id\":\"$TOPIC_ID\"}")
-echo "$SUB_RESP"
+echo "[3/6] Open protected page (/api/me)"
+request GET "$BFF_URL/api/me" __NO_BODY__ -H "Authorization: Bearer $ACCESS_TOKEN"
+expect_code "$RESPONSE_CODE" 200
+echo "$RESPONSE_BODY"
 
-echo "[4/5] Create notification"
-NOTIF_RESP=$(curl -sS -X POST "$BFF_URL/notifications" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{\"topic_id\":\"$TOPIC_ID\",\"payload\":{\"title\":\"smoke\",\"source\":\"bff\"},\"idempotency_key\":\"smoke-$(date +%s)\"}")
-echo "$NOTIF_RESP"
+echo "[4/6] Force expired/invalid access token -> expect 401"
+request GET "$BFF_URL/api/me" __NO_BODY__ -H "Authorization: Bearer invalid-token"
+expect_code "$RESPONSE_CODE" 401
+echo "$RESPONSE_BODY"
 
-NOTIF_ID=$(echo "$NOTIF_RESP" | python3 -c 'import sys, json; d=json.load(sys.stdin); print(d.get("id", ""))')
-if [[ -z "$NOTIF_ID" ]]; then
-  echo "Notification creation failed: id missing"
+echo "[5/6] Refresh with HttpOnly cookie and retry protected call"
+request POST "$BFF_URL/api/auth/refresh" "{}" -b "$COOKIE_JAR" -c "$COOKIE_JAR"
+expect_code "$RESPONSE_CODE" 200
+echo "$RESPONSE_BODY"
+NEW_ACCESS_TOKEN="$(json_get access_token)"
+if [[ -z "$NEW_ACCESS_TOKEN" ]]; then
+  echo "Refresh failed: access_token missing"
   exit 1
 fi
 
-echo "[5/5] Get my notifications"
-ME_RESP=$(curl -sS "$BFF_URL/notifications/me?limit=5" \
-  -H "Authorization: Bearer $ACCESS_TOKEN")
-echo "$ME_RESP"
+request GET "$BFF_URL/api/me" __NO_BODY__ -H "Authorization: Bearer $NEW_ACCESS_TOKEN"
+expect_code "$RESPONSE_CODE" 200
+echo "$RESPONSE_BODY"
+
+echo "[6/6] First topics screen (/api/topics)"
+request GET "$BFF_URL/api/topics?limit=10" __NO_BODY__ -H "Authorization: Bearer $NEW_ACCESS_TOKEN"
+expect_code "$RESPONSE_CODE" 200
+echo "$RESPONSE_BODY"
 
 echo "Smoke test passed"

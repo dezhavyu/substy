@@ -58,14 +58,16 @@ def create_app() -> FastAPI:
         allow_origins=settings.parsed_cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id", "Idempotency-Key"],
     )
     app.add_middleware(AccessLogMiddleware, logger=logger)
 
     app.include_router(system_router)
     app.include_router(auth_router)
     app.include_router(subscriptions_router)
+    app.include_router(subscriptions_router, prefix="/api")
     app.include_router(notifications_router)
+    app.include_router(notifications_router, prefix="/api")
 
     register_exception_handlers(app)
     return app

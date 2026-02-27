@@ -63,7 +63,7 @@ async def test_proxy_forwards_query_body_and_identity_headers(monkeypatch):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             token = make_token()
             response = await client.post(
-                "/subscriptions?foo=bar",
+                "/api/subscriptions?foo=bar",
                 headers={"Authorization": f"Bearer {token}", "X-Request-Id": "req-1"},
                 json={"topic_id": str(uuid4())},
             )

@@ -112,13 +112,13 @@ for service in \
 done
 
 echo "[1/7] Register via BFF: $EMAIL"
-request POST "$BFF_URL/auth/register" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+request POST "$BFF_URL/api/auth/register" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
 expect_code "$RESPONSE_CODE" 200 201
 
 echo "$RESPONSE_BODY"
 
 echo "[2/7] Login via BFF"
-request POST "$BFF_URL/auth/login" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+request POST "$BFF_URL/api/auth/login" "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
 expect_code "$RESPONSE_CODE" 200
 
 echo "$RESPONSE_BODY"
@@ -159,14 +159,14 @@ else
 fi
 
 echo "[4/7] Subscribe via BFF"
-request POST "$BFF_URL/subscriptions" "{\"topic_id\":\"$TOPIC_ID\"}" -H "Authorization: Bearer $ACCESS_TOKEN"
+request POST "$BFF_URL/api/subscriptions" "{\"topic_id\":\"$TOPIC_ID\"}" -H "Authorization: Bearer $ACCESS_TOKEN"
 expect_code "$RESPONSE_CODE" 200 201
 
 echo "$RESPONSE_BODY"
 
 echo "[5/7] Create notification via BFF"
 IDEMPOTENCY_KEY="smoke-all-$(date +%s)"
-request POST "$BFF_URL/notifications" "{\"topic_id\":\"$TOPIC_ID\",\"payload\":{\"title\":\"smoke\",\"source\":\"smoke_all\"},\"idempotency_key\":\"$IDEMPOTENCY_KEY\"}" -H "Authorization: Bearer $ACCESS_TOKEN"
+request POST "$BFF_URL/api/notifications" "{\"topic_id\":\"$TOPIC_ID\",\"payload\":{\"title\":\"smoke\",\"source\":\"smoke_all\"},\"idempotency_key\":\"$IDEMPOTENCY_KEY\"}" -H "Authorization: Bearer $ACCESS_TOKEN"
 expect_code "$RESPONSE_CODE" 200 201
 
 echo "$RESPONSE_BODY"
@@ -177,7 +177,7 @@ if [[ -z "$NOTIFICATION_ID" ]]; then
 fi
 
 echo "[6/7] List notifications via BFF"
-request GET "$BFF_URL/notifications/me?limit=10" __NO_BODY__ -H "Authorization: Bearer $ACCESS_TOKEN"
+request GET "$BFF_URL/api/notifications/me?limit=10" __NO_BODY__ -H "Authorization: Bearer $ACCESS_TOKEN"
 expect_code "$RESPONSE_CODE" 200
 
 echo "$RESPONSE_BODY"

@@ -202,11 +202,11 @@ cd /Users/eduardishchenko/coding/Substy/substy
 ./scripts/smoke_all.sh
 ```
 
-### BFF-only smoke with prepared topic
+### BFF-only smoke (auth + refresh + protected + topics)
 
 ```bash
 cd /Users/eduardishchenko/coding/Substy/substy
-TOPIC_ID=<topic-uuid> ./scripts/smoke_bff.sh
+./scripts/smoke_bff.sh
 ```
 
 ## Security Notes
@@ -228,6 +228,19 @@ Recommended deployment path:
 
 Frontend can live in a separate GitHub repository.
 Use BFF (`:8070`) as the only backend entrypoint.
+
+Recommended initial contract:
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/logout`
+- `GET /api/me`
+- `GET /api/topics?cursor&limit`
+
+Auth behavior in BFF:
+- `login`/`refresh` return `access_token` and set `refresh_token` as `HttpOnly` cookie.
+- `refresh_token` is not returned in JSON body from BFF.
+- cookie defaults are local-dev friendly: `SameSite=Lax`, `Secure=false`, `domain=localhost` (implicit when domain is unset).
 
 ## Status
 

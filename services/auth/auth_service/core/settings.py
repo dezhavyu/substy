@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="auth-service", alias="JWT_ISSUER")
     jwt_audience: str = Field(default="substy", alias="JWT_AUDIENCE")
     jwt_access_token_ttl_minutes: int = Field(default=15, alias="JWT_ACCESS_TOKEN_TTL_MINUTES")
+    jwt_refresh_token_ttl_seconds: int | None = Field(default=None, alias="JWT_REFRESH_TOKEN_TTL_SECONDS")
     jwt_refresh_token_ttl_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_TTL_DAYS")
     jwt_secret: str = Field(default="change-me-super-secret", alias="JWT_SECRET")
     jwt_private_key: str = Field(default="", alias="JWT_PRIVATE_KEY")
@@ -53,6 +54,12 @@ class Settings(BaseSettings):
         return (
             f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    @property
+    def effective_refresh_token_ttl_seconds(self) -> int:
+        if self.jwt_refresh_token_ttl_seconds is not None:
+            return max(1, self.jwt_refresh_token_ttl_seconds)
+        return max(1, self.jwt_refresh_token_ttl_days * 24 * 60 * 60)
 
 
 @lru_cache
