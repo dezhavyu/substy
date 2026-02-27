@@ -130,7 +130,7 @@ Delivery processing is safe under at-least-once delivery with idempotency in DB 
 ### 1) Start all services
 
 ```bash
-cd /Users/eduardishchenko/coding/Substy/substy
+cd /Users/user/coding/Substy/substy
 make up
 ```
 
@@ -178,7 +178,7 @@ Infra ports (local development):
 ### Monorepo unit tests
 
 ```bash
-cd /Users/eduardishchenko/coding/Substy/substy
+cd /Users/user/coding/Substy/substy
 make test
 ```
 
@@ -187,8 +187,8 @@ make test
 Example:
 
 ```bash
-cd /Users/eduardishchenko/coding/Substy/substy/services/delivery
-source /Users/eduardishchenko/coding/Substy/.venv/bin/activate
+cd /Users/user/coding/Substy/substy/services/delivery
+source /Users/user/coding/Substy/.venv/bin/activate
 python -m pytest -q delivery_service/tests/unit
 python -m pytest -q delivery_service/tests/integration
 ```
@@ -198,14 +198,14 @@ python -m pytest -q delivery_service/tests/integration
 ### Full system smoke
 
 ```bash
-cd /Users/eduardishchenko/coding/Substy/substy
+cd /Users/user/coding/Substy/substy
 ./scripts/smoke_all.sh
 ```
 
 ### BFF-only smoke (auth + refresh + protected + topics)
 
 ```bash
-cd /Users/eduardishchenko/coding/Substy/substy
+cd /Users/user/coding/Substy/substy
 ./scripts/smoke_bff.sh
 ```
 
