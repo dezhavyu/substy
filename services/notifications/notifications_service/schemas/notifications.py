@@ -18,6 +18,7 @@ class CreateNotificationRequest(BaseModel):
 class NotificationResponse(BaseModel):
     id: UUID
     topic_id: UUID
+    payload: dict[str, Any]
     status: NotificationStatus
     scheduled_at: datetime | None
     created_at: datetime

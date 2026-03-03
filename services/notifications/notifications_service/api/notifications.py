@@ -45,6 +45,7 @@ async def create_notification(
     return NotificationResponse(
         id=notification.id,
         topic_id=notification.topic_id,
+        payload=notification.payload,
         status=notification.status,
         scheduled_at=notification.scheduled_at,
         created_at=notification.created_at,
@@ -74,6 +75,7 @@ async def list_my_notifications(
             NotificationResponse(
                 id=row.id,
                 topic_id=row.topic_id,
+                payload=row.payload,
                 status=row.status,
                 scheduled_at=row.scheduled_at,
                 created_at=row.created_at,
@@ -101,6 +103,7 @@ async def get_notification(
     return NotificationResponse(
         id=notification.id,
         topic_id=notification.topic_id,
+        payload=notification.payload,
         status=notification.status,
         scheduled_at=notification.scheduled_at,
         created_at=notification.created_at,
@@ -124,6 +127,7 @@ async def cancel_notification(
     return NotificationResponse(
         id=notification.id,
         topic_id=notification.topic_id,
+        payload=notification.payload,
         status=notification.status,
         scheduled_at=notification.scheduled_at,
         created_at=notification.created_at,

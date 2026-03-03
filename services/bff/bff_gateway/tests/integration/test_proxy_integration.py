@@ -73,3 +73,86 @@ async def test_proxy_forwards_query_body_and_identity_headers(monkeypatch):
     assert "topic_id" in captured["body"]
     assert captured["x_user_id"]
     assert "admin" in (captured["x_user_roles"] or "")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_subscribe_creates_notification_event(monkeypatch):
+    monkeypatch.setenv("AUTH_SERVICE_URL", "http://auth.test")
+    monkeypatch.setenv("SUBSCRIPTIONS_SERVICE_URL", "http://subs.test")
+    monkeypatch.setenv("NOTIFICATIONS_SERVICE_URL", "http://notifs.test")
+    get_settings.cache_clear()
+
+    app = create_app()
+    topic_id = str(uuid4())
+    subscription_id = str(uuid4())
+    captured = {}
+
+    respx.post("http://subs.test/subscriptions").mock(
+        return_value=Response(201, json={"id": subscription_id, "topic_id": topic_id, "is_active": True})
+    )
+
+    def notifications_handler(request):
+        captured["body"] = request.content.decode("utf-8")
+        captured["x_user_id"] = request.headers.get("x-user-id")
+        return Response(201, json={"id": str(uuid4())})
+
+    notifications_route = respx.post("http://notifs.test/notifications").mock(side_effect=notifications_handler)
+
+    async with LifespanManager(app):
+        app.state.redis = FakeRedis()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            token = make_token()
+            response = await client.post(
+                "/api/subscriptions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"topic_id": topic_id},
+            )
+
+    assert response.status_code == 201
+    assert notifications_route.call_count == 1
+    assert topic_id in (captured.get("body") or "")
+    assert "subscription.subscribed" in (captured.get("body") or "")
+    assert captured.get("x_user_id")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_unsubscribe_creates_notification_event(monkeypatch):
+    monkeypatch.setenv("AUTH_SERVICE_URL", "http://auth.test")
+    monkeypatch.setenv("SUBSCRIPTIONS_SERVICE_URL", "http://subs.test")
+    monkeypatch.setenv("NOTIFICATIONS_SERVICE_URL", "http://notifs.test")
+    get_settings.cache_clear()
+
+    app = create_app()
+    topic_id = str(uuid4())
+    subscription_id = str(uuid4())
+    captured = {}
+
+    respx.get("http://subs.test/subscriptions/me").mock(
+        return_value=Response(
+            200,
+            json={"items": [{"id": subscription_id, "topic_id": topic_id, "is_active": True}], "next_cursor": None},
+        )
+    )
+    respx.delete(f"http://subs.test/subscriptions/{subscription_id}").mock(return_value=Response(204))
+
+    def notifications_handler(request):
+        captured["body"] = request.content.decode("utf-8")
+        return Response(201, json={"id": str(uuid4())})
+
+    notifications_route = respx.post("http://notifs.test/notifications").mock(side_effect=notifications_handler)
+
+    async with LifespanManager(app):
+        app.state.redis = FakeRedis()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            token = make_token()
+            response = await client.delete(
+                f"/api/subscriptions/{subscription_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert response.status_code == 204
+    assert notifications_route.call_count == 1
+    assert topic_id in (captured.get("body") or "")
+    assert "subscription.unsubscribed" in (captured.get("body") or "")
