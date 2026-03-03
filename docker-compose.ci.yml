@@ -1,0 +1,413 @@
+name: substy-ci
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_ci_data:/var/lib/postgresql/data
+      - ./services/auth/auth_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_auth.sql:ro
+      - ./services/subscriptions/subscriptions_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/002_subscriptions.sql:ro
+      - ./services/subscriptions/subscriptions_service/migrations/002_subscription_preferences.sql:/docker-entrypoint-initdb.d/003_subscriptions_preferences.sql:ro
+      - ./services/notifications/notifications_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/004_notifications.sql:ro
+      - ./services/delivery/delivery_service/migrations/001_init.sql:/docker-entrypoint-initdb.d/005_delivery.sql:ro
+      - ./services/delivery/delivery_service/migrations/002_quiet_hours_preferences.sql:/docker-entrypoint-initdb.d/006_delivery_quiet_hours.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      - platform_net
+
+  redis:
+    image: redis:7-alpine
+    restart: "no"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+    networks:
+      - platform_net
+
+  nats:
+    image: nats:2.11-alpine
+    restart: "no"
+    command: ["-js", "-sd", "/data/jetstream", "-m", "8222"]
+    volumes:
+      - nats_ci_data:/data/jetstream
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8222/healthz | grep -q ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      - platform_net
+
+  auth-service:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    restart: "no"
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      JWT_ACCESS_TOKEN_TTL_MINUTES: ${JWT_ACCESS_TOKEN_TTL_MINUTES}
+      JWT_REFRESH_TOKEN_TTL_SECONDS: ${JWT_REFRESH_TOKEN_TTL_SECONDS}
+      JWT_SECRET: ${JWT_SECRET}
+      REFRESH_TOKEN_PEPPER: ${REFRESH_TOKEN_PEPPER}
+      RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN}
+      RATE_LIMIT_REGISTER: ${RATE_LIMIT_REGISTER}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform_net
+
+  subscriptions-service:
+    build:
+      context: ./services/subscriptions
+      dockerfile: Dockerfile
+    restart: "no"
+    ports:
+      - "8090:8090"
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform_net
+
+  notifications-api:
+    build:
+      context: ./services/notifications
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["uvicorn", "notifications_service.main:app", "--host", "0.0.0.0", "--port", "8091"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: ${NATS_STREAM_NAME}
+      NATS_SUBJECT_NOTIFICATION_CREATED: ${NATS_SUBJECT_NOTIFICATION_CREATED}
+      OUTBOX_WORKER_ENABLED: "false"
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform_net
+
+  notifications-outbox-publisher:
+    build:
+      context: ./services/notifications
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["python", "-m", "notifications_service.workers.run_outbox_publisher"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: ${NATS_STREAM_NAME}
+      NATS_SUBJECT_NOTIFICATION_CREATED: ${NATS_SUBJECT_NOTIFICATION_CREATED}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE}
+      OUTBOX_PUBLISH_INTERVAL_SECONDS: ${OUTBOX_PUBLISH_INTERVAL_SECONDS}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      notifications-api:
+        condition: service_healthy
+    networks:
+      - platform_net
+
+  notifications-scheduler:
+    build:
+      context: ./services/notifications
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["python", "-m", "notifications_service.scheduler.run_scheduler"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE}
+      SCHEDULER_TICK_INTERVAL_SECONDS: ${SCHEDULER_TICK_INTERVAL_SECONDS}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notifications-api:
+        condition: service_healthy
+    networks:
+      - platform_net
+
+  delivery-api:
+    build:
+      context: ./services/delivery
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["uvicorn", "delivery_service.main:app", "--host", "0.0.0.0", "--port", "8092"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: ${NATS_STREAM_NAME}
+      NATS_SUBJECT_NOTIFICATION_CREATED: ${NATS_SUBJECT_NOTIFICATION_CREATED}
+      NATS_SUBJECT_DELIVERY_SUCCEEDED: ${NATS_SUBJECT_DELIVERY_SUCCEEDED}
+      NATS_SUBJECT_DELIVERY_FAILED: ${NATS_SUBJECT_DELIVERY_FAILED}
+      SUBSCRIPTIONS_INTERNAL_URL: http://subscriptions-service:8090
+      PROVIDER_STUB_FAIL_RATE: ${PROVIDER_STUB_FAIL_RATE}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      subscriptions-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform_net
+
+  delivery-consumer:
+    build:
+      context: ./services/delivery
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["python", "-m", "delivery_service.consumers.run_consumer"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: ${NATS_STREAM_NAME}
+      NATS_SUBJECT_NOTIFICATION_CREATED: ${NATS_SUBJECT_NOTIFICATION_CREATED}
+      NATS_SUBJECT_DELIVERY_SUCCEEDED: ${NATS_SUBJECT_DELIVERY_SUCCEEDED}
+      NATS_SUBJECT_DELIVERY_FAILED: ${NATS_SUBJECT_DELIVERY_FAILED}
+      SUBSCRIPTIONS_INTERNAL_URL: http://subscriptions-service:8090
+      PROVIDER_STUB_FAIL_RATE: ${PROVIDER_STUB_FAIL_RATE}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      subscriptions-service:
+        condition: service_healthy
+    networks:
+      - platform_net
+
+  delivery-worker:
+    build:
+      context: ./services/delivery
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["arq", "delivery_service.workers.arq_worker.WorkerSettings"]
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+      NATS_STREAM_NAME: ${NATS_STREAM_NAME}
+      NATS_SUBJECT_NOTIFICATION_CREATED: ${NATS_SUBJECT_NOTIFICATION_CREATED}
+      NATS_SUBJECT_DELIVERY_SUCCEEDED: ${NATS_SUBJECT_DELIVERY_SUCCEEDED}
+      NATS_SUBJECT_DELIVERY_FAILED: ${NATS_SUBJECT_DELIVERY_FAILED}
+      SUBSCRIPTIONS_INTERNAL_URL: http://subscriptions-service:8090
+      PROVIDER_STUB_FAIL_RATE: ${PROVIDER_STUB_FAIL_RATE}
+      OTEL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      subscriptions-service:
+        condition: service_healthy
+    networks:
+      - platform_net
+
+  bff-gateway:
+    build:
+      context: ./services/bff
+      dockerfile: Dockerfile
+    restart: "no"
+    ports:
+      - "8070:8070"
+    environment:
+      APP_ENV: ci
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL}
+      APP_JSON_LOGS: ${APP_JSON_LOGS}
+      AUTH_SERVICE_URL: http://auth-service:8080
+      SUBSCRIPTIONS_SERVICE_URL: http://subscriptions-service:8090
+      NOTIFICATIONS_SERVICE_URL: http://notifications-api:8091
+      REDIS_URL: redis://redis:6379/0
+      JWT_MODE: local
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_SECRET: ${JWT_SECRET}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE}
+      RATE_LIMIT_USER_PER_MINUTE: ${RATE_LIMIT_USER_PER_MINUTE}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      REFRESH_COOKIE_NAME: refresh_token
+      REFRESH_COOKIE_DOMAIN:
+      REFRESH_COOKIE_PATH: /
+      REFRESH_COOKIE_SECURE: "false"
+      REFRESH_COOKIE_SAMESITE: lax
+      REFRESH_COOKIE_MAX_AGE_SECONDS: ${JWT_REFRESH_TOKEN_TTL_SECONDS}
+      OTEL_ENABLED: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      subscriptions-service:
+        condition: service_healthy
+      notifications-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform_net
+
+  frontend:
+    build:
+      context: ${FRONTEND_DIR:-./substy_web/notification-platform-frontend}
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    restart: "no"
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_BFF_BASE_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_TOPICS_PAGE_SIZE: ${NEXT_PUBLIC_TOPICS_PAGE_SIZE}
+      NEXT_PUBLIC_INBOX_PAGE_SIZE: ${NEXT_PUBLIC_INBOX_PAGE_SIZE}
+    depends_on:
+      bff-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks:
+      - platform_net
+
+volumes:
+  postgres_ci_data:
+  nats_ci_data:
+
+networks:
+  platform_net:
+    driver: bridge
