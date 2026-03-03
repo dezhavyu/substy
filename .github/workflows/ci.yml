@@ -14,8 +14,17 @@ jobs:
       - name: Checkout backend repository
         uses: actions/checkout@v4
 
+      - name: Detect embedded frontend
+        id: frontend-local
+        run: |
+          if [ -d "substy_web/notification-platform-frontend" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout frontend repository
-        if: ${{ vars.FRONTEND_REPOSITORY != '' }}
+        if: ${{ steps.frontend-local.outputs.exists != 'true' && vars.FRONTEND_REPOSITORY != '' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.FRONTEND_REPOSITORY }}
@@ -24,7 +33,12 @@ jobs:
 
       - name: Ensure frontend source exists
         run: |
-          test -d substy_web/notification-platform-frontend
+          if [ ! -d "substy_web/notification-platform-frontend" ]; then
+            echo "Frontend source is missing."
+            echo "Set repository variable FRONTEND_REPOSITORY to your frontend repo (owner/name),"
+            echo "or commit frontend sources into this repository at substy_web/notification-platform-frontend."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
