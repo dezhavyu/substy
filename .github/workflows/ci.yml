@@ -71,6 +71,23 @@ jobs:
         working-directory: substy_web/notification-platform-frontend
         run: npx playwright install --with-deps chromium
 
+      - name: Validate required CI secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          REFRESH_TOKEN_PEPPER: ${{ secrets.REFRESH_TOKEN_PEPPER }}
+        run: |
+          missing=0
+          for var in POSTGRES_PASSWORD JWT_SECRET REFRESH_TOKEN_PEPPER; do
+            if [ -z "${!var}" ]; then
+              echo "Missing required GitHub secret: ${var}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Create CI env file
         run: |
           cat > .env.ci <<'ENV'
@@ -111,7 +128,11 @@ jobs:
           ENV
 
       - name: Start integration stack
-        run: docker compose -f docker-compose.ci.yml --env-file .env.ci up -d --build
+        run: |
+          docker compose -f docker-compose.ci.yml --env-file .env.ci up -d --build || {
+            docker compose -f docker-compose.ci.yml --env-file .env.ci logs postgres
+            exit 1
+          }
 
       - name: Wait for BFF healthcheck
         run: |
